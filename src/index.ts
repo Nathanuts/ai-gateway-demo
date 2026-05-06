@@ -9,9 +9,11 @@
  */
 import { Env, ChatMessage } from "./types";
 
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// AI Gateway ID configured in the Cloudflare dashboard
+const GATEWAY_ID = "aichat-gateway";
+
+// Dynamic route name configured in the AI Gateway dashboard
+const DYNAMIC_ROUTE = "dynamic/chat-route";
 
 // Default system prompt
 const SYSTEM_PROMPT =
@@ -67,25 +69,35 @@ async function handleChatRequest(
       messages.unshift({ role: "system", content: SYSTEM_PROMPT });
     }
 
-    const response = await env.AI.run(
-      MODEL_ID,
-      {
+    // Route through AI Gateway dynamic route
+    // https://developers.cloudflare.com/ai-gateway/features/dynamic-routing/usage/
+    const response = await env.AI.gateway(GATEWAY_ID).run({
+      provider: "compat",
+      endpoint: "chat/completions",
+      headers: {},
+      query: {
+        model: DYNAMIC_ROUTE,
         messages,
-        max_tokens: 1024,
+        stream: true,
       },
-      {
-        returnRawResponse: true,
-        // Uncomment to use AI Gateway
-        // gateway: {
-        //   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
-        //   skipCache: false,      // Set to true to bypass cache
-        //   cacheTtl: 3600,        // Cache time-to-live in seconds
-        // },
-      },
-    );
+    });
 
-    // Return streaming response
-    return response;
+    if (!response.ok || !response.body) {
+      const detail = await response.clone().text().catch(() => "");
+      console.error("Gateway error:", response.status, detail);
+      return new Response(
+        JSON.stringify({ error: "Gateway request failed", detail }),
+        { status: 502, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return new Response(response.body, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   } catch (error) {
     console.error("Error processing chat request:", error);
     return new Response(
